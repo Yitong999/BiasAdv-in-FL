@@ -90,7 +90,7 @@ def celeba(log_dir, target_attr_idx, bias_attr_idx):
     main_num_steps = 636 * 200
     main_valid_freq = 636
     main_batch_size = 256
-    main_learning_rate = 1e-4
+    main_learning_rate = 1e-2
     main_weight_decay = 1e-4
     main_tag = 'CelebA-{}-{}'.format(target_attr_idx, bias_attr_idx)
     log_dir = os.path.join(log_dir, 'celeba')

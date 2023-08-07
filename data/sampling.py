@@ -44,7 +44,7 @@ def iid(dataset, num_users):
                                              replace=False))
         all_idxs = list(set(all_idxs) - dict_users[i])
     return dict_users
-
+    
 def extreme_noniid(dataset, num_users):
     """
     Sample non-I.I.D client data from MNIST dataset
@@ -59,11 +59,9 @@ def extreme_noniid(dataset, num_users):
 
     idxs_labels = np.vstack((idxs, colors))
 
-
     for idx in idxs_labels[0, :]:
         color = idxs_labels[1][idx]
-        np.append(dict_users[color], idx)
+        dict_users[color] = np.append(dict_users[color], idx)
         
     return dict_users
-    
     

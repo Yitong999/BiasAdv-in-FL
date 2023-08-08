@@ -20,6 +20,16 @@ python make_dataset.py with server_user make_target=colored_mnist
 python train.py with server_user colored_mnist skewed3 severity4
 ```
 
+## Training FL
+```
+python fedrated_train.py with server_user colored_mnist skewed3 severity4
+```
+
+## Training vanilla FL
+```
+python train_vanilla.py with server_user colored_mnist skewed3 severity4
+```
+
 ## Citation
 ```
 @inproceedings{nam2020learning,

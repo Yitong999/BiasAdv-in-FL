@@ -27,7 +27,7 @@ python fedrated_train.py with server_user colored_mnist skewed3 severity4
 
 ## Training vanilla FL
 ```
-python train_vanilla.py with server_user colored_mnist skewed3 severity4
+python train_fl_vanilla.py with server_user colored_mnist skewed3 severity4
 ```
 
 ## Citation

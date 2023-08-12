@@ -59,7 +59,7 @@ def server_user():
 def colored_mnist(log_dir):
     dataset_tag = "ColoredMNIST"
     model_tag = "CNN"
-    main_num_steps = 3000
+    main_num_steps = 300
     target_attr_idx = 0
     bias_attr_idx = 1
     main_valid_freq = 235

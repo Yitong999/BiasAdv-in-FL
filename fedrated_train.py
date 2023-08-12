@@ -88,7 +88,7 @@ def pgd_attack_adv(device, model_b, model_d, images, labels, eps=0.4, alpha=4/25
         
     return images
 
-def pgd_attack_both_adv(device, model_global, model_b, model_d, images, labels, eps=0.4, alpha=4/255, lmd = 1, iters=40) :
+def pgd_attack_both_adv(device, model_global, model_b, model_d, images, labels, eps=0.4, alpha=4/255, lmd = 0.5, iters=40) :
     images = images.to(device)
     labels = labels.to(device)
 
@@ -192,8 +192,8 @@ def train(
     num_users = 10
     frac = 1
 
-    user_groups = extreme_noniid(train_dataset, num_users)
-    print('user_groups: ', user_groups)
+    user_groups = iid(train_dataset, num_users)
+    # print('user_groups: ', user_groups)
     train_dataset_list = [
         DatasetSplit(train_dataset, user_groups[i])
         for i in range(10)]
@@ -214,8 +214,6 @@ def train(
     train_bias_attr = train_dataset.attr[:, bias_attr_idx]
 
     attr_dims = []
-    # attr_dims.append(torch.max(train_target_attr).item() + 1)
-    # attr_dims.append(torch.max(train_bias_attr).item() + 1)
 
     attr_dims.append(torch.max(train_target_attr).item() + 1)
     attr_dims.append(torch.max(train_bias_attr).item() + 1)
@@ -311,17 +309,17 @@ def train(
         criterion = nn.CrossEntropyLoss(reduction='none')
         bias_criterion = GeneralizedCELoss() #hacked
 
-        '''
-        sample_loss_ema_b = EMA(torch.LongTensor(train_target_attr), alpha=0.7)
-        sample_loss_ema_d = EMA(torch.LongTensor(train_target_attr), alpha=0.7)
-        '''
+        
+        # sample_loss_ema_b = EMA(torch.LongTensor(train_target_attr), alpha=0.7)
+        # sample_loss_ema_d = EMA(torch.LongTensor(train_target_attr), alpha=0.7)
+        
 
         for step in tqdm(range(local_epochs)):
             batch_loss = []
 
             # train main model
             try:
-                _, data, attr = next(train_iter)
+                index, data, attr = next(train_iter)
             except:
                 loader = train_loader_list[client]
                 # loader = train_loader
@@ -329,7 +327,7 @@ def train(
                 train_iter = iter(loader)
                 # train_iter = iter(train_loader)
                 
-                _, data, attr = next(train_iter)
+                index, data, attr = next(train_iter)
                 
             #original version
             data = data.to(device)
@@ -341,15 +339,6 @@ def train(
             data_adv = pgd_attack_adv(device, model_b, model_global, data, label)
             # data_adv = pgd_attack_both_adv(device, model_global, model_b, model_global, data, label)
     
-            # if client == 1:
-            #     count = [0 for i in range(10)]
-            #     for j in range(256):
-            #         count[label[j]] += 1
-
-            #     print('client[1] images class: ', count)
-
-            #     writer.add_image('adv images', data_adv[0], local_epochs*epochs+step)
-            #     writer.add_image('ori images', data[0], local_epochs*epochs+step)
 
             count = [0 for i in range(10)]
             for j in range(256):
@@ -373,9 +362,41 @@ def train(
     #         print('###shape output###: ', logit_b.shape)
     #         print('###shape labels###: ', label.shape)
             
-            loss_b = criterion(logit_b, label).to(device)
-            loss_d = criterion(logit_d, label).to(device)
+            loss_b = criterion(logit_b, label)
+            loss_d = criterion(logit_d, label)
             
+            if np.isnan(loss_b.mean().item()):
+                raise NameError('loss_b')
+            if np.isnan(loss_d.mean().item()):
+                raise NameError('loss_d')
+            
+            loss_per_sample_b = loss_b
+            loss_per_sample_d = loss_d
+
+            # EMA sample loss
+            # sample_loss_ema_b.update(loss_b, index)
+            # sample_loss_ema_d.update(loss_d, index)
+
+            # class-wise normalize
+            # loss_b = sample_loss_ema_b.parameter[index].clone().detach()
+            # loss_d = sample_loss_ema_d.parameter[index].clone().detach()
+
+            if np.isnan(loss_b.mean().item()):
+                raise NameError('loss_b_ema')
+            if np.isnan(loss_d.mean().item()):
+                raise NameError('loss_d_ema')
+            
+            # label_cpu = label.cpu()
+        
+            # for c in range(num_classes):
+            #     class_index = np.where(label_cpu == c)[0]
+            #     max_loss_b = sample_loss_ema_b.max_loss(c)
+            #     max_loss_d = sample_loss_ema_d.max_loss(c)
+            #     loss_b[class_index] /= max_loss_b
+            #     loss_d[class_index] /= max_loss_d
+
+
+
             '''
             loss_b = criterion(logit_b, label).cpu().detach()
             loss_d = criterion(logit_d, label).cpu().detach()
@@ -434,6 +455,8 @@ def train(
             loss_weight_adv = beta * (1 - loss_weight)
             
             if np.isnan(loss_weight.mean().item()):
+                print('loss_weight mean: ', loss_weight.mean())
+                print('loss_weight mean item: ', loss_weight.mean().item())
                 print('loss_weight: ', loss_weight)
                 print('loss_b: ', loss_b)
                 print('loss_d: ', loss_d)
@@ -451,6 +474,37 @@ def train(
             loss = loss_b_update.mean() + loss_d_update.mean()
 #             loss = loss_d_update.mean()
 
+            # for a easier look up, we only check for client 1
+            if client == 1:
+                bias_attr = attr[:, bias_attr_idx]
+
+                aligned_mask = (label == bias_attr)
+                skewed_mask = (label != bias_attr)
+                # check biased model's performance
+                if aligned_mask.any().item():
+                    writer.add_scalar("loss_client_1/b_train_aligned", loss_b[aligned_mask].mean(), local_epochs*epochs+step)
+
+                if skewed_mask.any().item():
+                    writer.add_scalar("loss_client_1/b_train_skewed", loss_b[skewed_mask].mean(), local_epochs*epochs+step)
+
+                writer.add_scalar("loss_client_1/b_train", loss_per_sample_b.mean(), local_epochs*epochs+step)
+                writer.add_image('adv images', data_adv[0], local_epochs*epochs+step)
+                writer.add_image('ori images', data[0], local_epochs*epochs+step)
+
+                #check Disparate Impact on biased model
+                '''
+                disparate_impact_arr = []
+                for i in range(10):
+                    disparate_impact = disparate_impact_helper(i, model_b, valid_loader)
+                    
+                    if not math.isnan(disparate_impact):
+                        disparate_impact_arr.append(disparate_impact)
+                        writer.add_scalar('disparate_impact on local biased model/' + str(i), disparate_impact, local_epochs*epochs+step)   
+                writer.add_scalar('disparate_impact_mean on local biased model/', np.mean(np.array(disparate_impact_arr)), local_epochs*epochs+step)   
+                '''
+
+
+
             optimizer_b.zero_grad()
             optimizer_d.zero_grad()
             
@@ -460,7 +514,8 @@ def train(
 
             optimizer_d.step()
 
-            batch_loss.append(loss.item())
+#             batch_loss.append(loss.item())
+            batch_loss.append(loss_d_update.nanmean().item())
         #------ finish updating a client's local model -------
 
         epoch_loss.append(sum(batch_loss)/len(batch_loss))
@@ -621,6 +676,9 @@ def train(
             # -- garbage ----
 
         # define evaluation function
+
+    end_time = datetime.now()
+    print(f'It takes {end_time - start_time} in the training')
         
             
 

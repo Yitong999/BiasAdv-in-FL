@@ -22,7 +22,7 @@ from config import ex
 from data.util import get_dataset, IdxDataset, ZippedDataset,average_weights, DatasetSplit
 from module.util import get_model
 from util import MultiDimAverageMeter
-from data.sampling import iid, noniid
+from data.sampling import iid, noniid, extreme_noniid
 
 import math
 
@@ -330,7 +330,7 @@ def train(
         # model_global.eval()
         # evaluate(model_global, valid_loader)
         # -- --
-        main_log_freq = 10
+        main_log_freq = 1
         if epoch % main_log_freq == 0:
             print('acc: ', torch.mean(evaluate(model_global, valid_loader)))
 

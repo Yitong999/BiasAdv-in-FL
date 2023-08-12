@@ -199,7 +199,7 @@ def train(
                 print('client[1] images class: ', count)
 
                 writer.add_image('ori images', data[0], local_epochs*epoch+step)
-
+                
             logit = model(data)
             loss_per_sample = criterion(logit.squeeze(1), label)
 

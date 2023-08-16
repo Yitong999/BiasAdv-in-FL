@@ -26,7 +26,7 @@ from util import MultiDimAverageMeter, EMA
 from data.sampling import noniid, iid, extreme_noniid
 
 # BiasAdv
-def pgd_attack_adv(device, model_b, model_d, images, labels, eps=0.4, alpha=4/255, lmd = 1, iters=40) :
+def pgd_attack_adv(device, model_b, model_d, images, labels, eps=0.4, alpha=4/255, lmd = 2, iters=40) :
     images = images.to(device)
     labels = labels.to(device)
 
@@ -88,7 +88,7 @@ def pgd_attack_adv(device, model_b, model_d, images, labels, eps=0.4, alpha=4/25
         
     return images
 
-def pgd_attack_both_adv(device, model_global, model_b, model_d, images, labels, eps=0.4, alpha=4/255, lmd = 0.5, iters=40) :
+def pgd_attack_both_adv(device, model_global, model_b, model_d, images, labels, eps=0.4, alpha=4/255, lmd = 1, iters=40) :
     images = images.to(device)
     labels = labels.to(device)
 
@@ -192,7 +192,7 @@ def train(
     num_users = 10
     frac = 1
 
-    user_groups = iid(train_dataset, num_users)
+    user_groups = noniid(train_dataset, num_users)
     # print('user_groups: ', user_groups)
     train_dataset_list = [
         DatasetSplit(train_dataset, user_groups[i])
@@ -265,7 +265,7 @@ def train(
         model_b.train()
         model_d.train()
         epoch_loss = []
-
+        
         
         if main_optimizer_tag == "SGD":
             optimizer_b = torch.optim.SGD(
@@ -280,6 +280,10 @@ def train(
                 weight_decay=main_weight_decay,
                 momentum=0.9,
             )
+
+            # scheduler_b = torch.optim.lr_scheduler.StepLR(optimizer_b, step_size=1, gamma=0.1)
+            # scheduler_d = torch.optim.lr_scheduler.StepLR(optimizer_d, step_size=1, gamma=0.1)
+
         elif main_optimizer_tag == "Adam":
             optimizer_b = torch.optim.Adam(
                 model_b.parameters(),
@@ -310,22 +314,22 @@ def train(
         bias_criterion = GeneralizedCELoss() #hacked
 
         
-        # sample_loss_ema_b = EMA(torch.LongTensor(train_target_attr), alpha=0.7)
-        # sample_loss_ema_d = EMA(torch.LongTensor(train_target_attr), alpha=0.7)
+        sample_loss_ema_b = EMA(torch.LongTensor(train_target_attr), alpha=0.7)
+        sample_loss_ema_d = EMA(torch.LongTensor(train_target_attr), alpha=0.7)
         
 
         for step in tqdm(range(local_epochs)):
             batch_loss = []
+            batch_loss_ori = []
+            batch_loss_adv = []
 
             # train main model
             try:
                 index, data, attr = next(train_iter)
             except:
                 loader = train_loader_list[client]
-                # loader = train_loader
                 print('### client: ', client)
                 train_iter = iter(loader)
-                # train_iter = iter(train_loader)
                 
                 index, data, attr = next(train_iter)
                 
@@ -333,7 +337,7 @@ def train(
             data = data.to(device)
             attr = attr.to(device)
             label = attr[:, target_attr_idx]
-            color = attr[:, 1]
+            color = attr[:, bias_attr_idx]
             
             #hacked verison
             data_adv = pgd_attack_adv(device, model_b, model_global, data, label)
@@ -347,8 +351,6 @@ def train(
             print(f'client[{client}] images color: ', count)
 
             
-            target_label = attr[:, target_attr_idx]
-            bias_label = attr[:, bias_attr_idx]
             
             logit_b = model_b(data)
             if np.isnan(logit_b.mean().item()):
@@ -362,16 +364,16 @@ def train(
     #         print('###shape output###: ', logit_b.shape)
     #         print('###shape labels###: ', label.shape)
             
-            loss_b = criterion(logit_b, label)
-            loss_d = criterion(logit_d, label)
+            loss_b = criterion(logit_b, label).cpu().detach()
+            loss_d = criterion(logit_d, label).cpu().detach()
             
             if np.isnan(loss_b.mean().item()):
                 raise NameError('loss_b')
             if np.isnan(loss_d.mean().item()):
                 raise NameError('loss_d')
             
-            loss_per_sample_b = loss_b
-            loss_per_sample_d = loss_d
+            # loss_per_sample_b = loss_b
+            # loss_per_sample_d = loss_d
 
             # EMA sample loss
             # sample_loss_ema_b.update(loss_b, index)
@@ -392,8 +394,8 @@ def train(
             #     class_index = np.where(label_cpu == c)[0]
             #     max_loss_b = sample_loss_ema_b.max_loss(c)
             #     max_loss_d = sample_loss_ema_d.max_loss(c)
-            #     loss_b[class_index] /= max_loss_b
-            #     loss_d[class_index] /= max_loss_d
+            #     loss_b[class_index] /= (max_loss_b + 1e-8)
+            #     loss_d[class_index] /= (max_loss_d + 1e-8)
 
 
 
@@ -451,7 +453,7 @@ def train(
 #             loss_weight = loss_d / (loss_d + 1e-8)
 
             #hacked
-            beta = 0.4
+            beta = 0.01 * epoch
             loss_weight_adv = beta * (1 - loss_weight)
             
             if np.isnan(loss_weight.mean().item()):
@@ -466,8 +468,10 @@ def train(
 
             if np.isnan(loss_b_update.mean().item()):
                 raise NameError('loss_b_update')
-            # loss_d_update = criterion(logit_d, label) * loss_weight.to(device)
-            loss_d_update = criterion(logit_d, label).to(device) * loss_weight.to(device) + criterion(logit_d_adv, label).to(device) * loss_weight_adv.to(device) #hacked version
+
+            loss_d_from_ori = criterion(logit_d, label)
+            loss_d_from_adv = criterion(logit_d_adv, label)
+            loss_d_update = loss_d_from_ori.to(device) * loss_weight.to(device) + loss_d_from_adv.to(device) * loss_weight_adv.to(device) #hacked version
 
             if np.isnan(loss_d_update.mean().item()):
                 raise NameError('loss_d_update')
@@ -478,8 +482,8 @@ def train(
             if client == 1:
                 bias_attr = attr[:, bias_attr_idx]
 
-                aligned_mask = (label == bias_attr)
-                skewed_mask = (label != bias_attr)
+                aligned_mask = (label == bias_attr).cpu()
+                skewed_mask = (label != bias_attr).cpu()
                 # check biased model's performance
                 if aligned_mask.any().item():
                     writer.add_scalar("loss_client_1/b_train_aligned", loss_b[aligned_mask].mean(), local_epochs*epochs+step)
@@ -487,7 +491,9 @@ def train(
                 if skewed_mask.any().item():
                     writer.add_scalar("loss_client_1/b_train_skewed", loss_b[skewed_mask].mean(), local_epochs*epochs+step)
 
-                writer.add_scalar("loss_client_1/b_train", loss_per_sample_b.mean(), local_epochs*epochs+step)
+                # writer.add_scalar("loss_client_1/b_train_val", loss_per_sample_b.mean(), local_epochs*epochs+step)
+                writer.add_scalar("loss_client_1/b_train_val", loss_b.mean(), local_epochs*epochs+step)
+                writer.add_scalar("loss_client_1/b_train_gce", loss_b_update.mean(), local_epochs*epochs+step)
                 writer.add_image('adv images', data_adv[0], local_epochs*epochs+step)
                 writer.add_image('ori images', data[0], local_epochs*epochs+step)
 
@@ -516,11 +522,17 @@ def train(
 
 #             batch_loss.append(loss.item())
             batch_loss.append(loss_d_update.nanmean().item())
+            batch_loss_ori.append(loss_d_from_ori.nanmean().item())
+            batch_loss_adv.append(loss_d_from_adv.nanmean().item())
         #------ finish updating a client's local model -------
 
-        epoch_loss.append(sum(batch_loss)/len(batch_loss))
+        # epoch_loss.append(sum(batch_loss)/len(batch_loss))
     
-        return model_b.state_dict(), model_d.state_dict(), sum(epoch_loss) / len(epoch_loss)
+        # return model_b.state_dict(), model_d.state_dict(), sum(epoch_loss) / len(epoch_loss)
+
+    
+        return model_b.state_dict(), model_d.state_dict(), sum(batch_loss) / len(batch_loss), sum(batch_loss_ori) / len(batch_loss_ori), sum(batch_loss_adv) / len(batch_loss_adv)
+    
 
     def evaluate(model, data_loader):
         model.eval()
@@ -593,44 +605,37 @@ def train(
         
             
 
-            
-
-        
-
-    train_loss, train_accuracy = [], []
-    val_acc_list, net_list = [], []
-    cv_loss, cv_acc = [], []
-    print_every = 2
-    val_loss_pre, counter = 0, 0
-
     global_epochs = main_num_steps
     
-
+    model_b_arr = {}
     for epoch in tqdm(range(global_epochs)):
-        local_weights, local_losses = [], []
+        local_weights, local_losses, local_loss_ori, local_loss_adv = [], [], [], []
         print(f'\n | Global Training Round : {epoch+1} |\n')
 
         model_global.train()
         m = max(int(frac * num_users), 1)
-        idxs_users = np.random.choice(range(num_users), m, replace=False)
-
-        model_b_arr = {}
+        # idxs_users = np.random.choice(range(num_users), m, replace=False)
+        idxs_users = [i for i in range(10)]
 
         for idx in idxs_users:
             try:
                 model_b = model_b_arr[idx]
+                # print('### old model_b is loaded###')
             except:
                 model_b_arr[idx] = copy.deepcopy(model_global_initial)
                 model_b = model_b_arr[idx]
 
             model_d = copy.deepcopy(model_global)
 
-            w_b, w_d, loss = update_weights(model_b, model_d, idx, epoch, local_epochs=5)
+            w_b, w_d, loss, loss_from_ori, loss_from_adv = update_weights(model_b, model_d, idx, epoch, local_epochs=5)
             local_weights.append(copy.deepcopy(w_d))
             local_losses.append(copy.deepcopy(loss))
+            local_loss_ori.append(copy.deepcopy(loss_from_ori))
+            local_loss_adv.append(copy.deepcopy(loss_from_adv))
 
             # update local biased model weights
-            model_b_arr[idx] = model_b_arr[idx].load_state_dict(w_b)
+            model_b_arr[idx].load_state_dict(w_b)
+            
 
         # update global weights
         global_weights = average_weights(local_weights)
@@ -639,7 +644,10 @@ def train(
         model_global.load_state_dict(global_weights)
 
         loss_avg = sum(local_losses) / len(local_losses)
-        train_loss.append(loss_avg)
+        loss_avg_from_ori = sum(local_loss_ori) / len(local_loss_ori)
+        loss_avg_from_adv = sum(local_loss_adv) / len(local_loss_adv)
+
+
 
         # Calculate avg training accuracy over all users at every epoch
         
@@ -650,7 +658,9 @@ def train(
         if epoch % main_log_freq == 0:
             print('acc: ', torch.mean(evaluate(model_global, valid_loader)))
 
-            writer.add_scalar("loss_avg", loss_avg, epoch)
+            writer.add_scalar("loss_avg/two_term", loss_avg, epoch)
+            writer.add_scalar("loss_avg/ori", loss_avg_from_ori, epoch)
+            writer.add_scalar("loss_avg/adv", loss_avg_from_adv, epoch)
             writer.add_scalar("acc", torch.mean(evaluate(model_global, valid_loader)), epoch)
             
             print('loss: ', loss_avg)
@@ -660,11 +670,11 @@ def train(
             for i in range(10):
                 disparate_impact = disparate_impact_helper(i, model_global, valid_loader)
                 
+                if not np.isnan(disparate_impact):
+                    disparate_impact_arr.append(disparate_impact)
+                    
 
-                disparate_impact_arr.append(disparate_impact)
-                
-
-                writer.add_scalar('disparate_impact/' + str(i), disparate_impact, epoch)   
+                    writer.add_scalar('disparate_impact/' + str(i), disparate_impact, epoch)   
                 
 
             # print('mean_b: ', np.mean(np.array(disparate_impact_b_arr)))
